@@ -1,0 +1,10 @@
+*.o
+*.d
+*.so
+*.pc
+build/**
+ffmpeg
+ffmpeg_g
+ffprobe
+ffprobe_g
+build.log
