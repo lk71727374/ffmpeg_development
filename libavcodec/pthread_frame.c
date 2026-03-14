@@ -289,6 +289,7 @@ static attribute_align_arg void *frame_worker_thread(void *arg)
 
             /* do the actual decoding */
             ret = ff_decode_receive_frame_internal(avctx, frame);
+            av_log(avctx, AV_LOG_DEBUG, "ff_decode_receive_frame_internal returned: %d\n", ret);
             if (ret == 0)
                 p->df.nb_f++;
             else if (ret < 0 && frame->buf[0])

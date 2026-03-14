@@ -240,6 +240,7 @@ static int raw_decode(AVCodecContext *avctx, AVFrame *frame,
         return context->frame_size;
 
     need_copy = !avpkt->buf || context->is_1_2_4_8_bpp || context->is_yuv2 || context->is_lt_16bpp;
+    av_log(avctx, AV_LOG_DEBUG, "frame_size: %d, need_copy: %d\n", context->frame_size, need_copy);
 
     res = ff_decode_frame_props(avctx, frame);
     if (res < 0)
@@ -260,6 +261,8 @@ static int raw_decode(AVCodecContext *avctx, AVFrame *frame,
         frame->buf[0] = av_buffer_ref(avpkt->buf);
     if (!frame->buf[0])
         return AVERROR(ENOMEM);
+
+    av_log(avctx, AV_LOG_DEBUG, "frame->buf[0] allocated with size %d\n", frame->buf[0]->size);
 
     // 1, 2, 4 and 8 bpp in avi/mov, 1 and 8 bpp in nut
     if (context->is_1_2_4_8_bpp) {
@@ -368,6 +371,8 @@ static int raw_decode(AVCodecContext *avctx, AVFrame *frame,
         av_buffer_unref(&frame->buf[0]);
         return res;
     }
+
+    av_log(avctx, AV_LOG_DEBUG, "Filled frame data and linesize, data[0]=%p, linesize[0]=%d\n", frame->data[0], frame->linesize[0]);
 
     if (avctx->pix_fmt == AV_PIX_FMT_PAL8) {
         int ret;

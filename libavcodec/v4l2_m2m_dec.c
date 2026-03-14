@@ -142,6 +142,7 @@ static int v4l2_receive_frame(AVCodecContext *avctx, AVFrame *frame)
 
     if (!s->buf_pkt.size) {
         ret = ff_decode_get_packet(avctx, &s->buf_pkt);
+        av_log(avctx, AV_LOG_DEBUG, "ff_decode_get_packet returned: %d\n", ret);
         if (ret < 0) {
             if (ret == AVERROR(EAGAIN))
                 return ff_v4l2_context_dequeue_frame(capture, frame, 0);
@@ -154,6 +155,7 @@ static int v4l2_receive_frame(AVCodecContext *avctx, AVFrame *frame)
         goto dequeue;
 
     ret = ff_v4l2_context_enqueue_packet(output, &s->buf_pkt);
+    av_log(avctx, AV_LOG_DEBUG, "ff_v4l2_context_enqueue_packet returned: %d\n", ret);
     if (ret < 0 && ret != AVERROR(EAGAIN))
         goto fail;
 
@@ -172,6 +174,7 @@ static int v4l2_receive_frame(AVCodecContext *avctx, AVFrame *frame)
     }
 
 dequeue:
+    av_log(avctx, AV_LOG_DEBUG, "Trying to dequeue frame from capture context\n");
     return ff_v4l2_context_dequeue_frame(capture, frame, -1);
 fail:
     av_packet_unref(&s->buf_pkt);

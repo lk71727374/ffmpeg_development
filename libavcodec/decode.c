@@ -421,6 +421,7 @@ static inline int decode_simple_internal(AVCodecContext *avctx, AVFrame *frame, 
     int got_frame, consumed;
     int ret;
 
+    av_log(avctx, AV_LOG_DEBUG, "decode_simple_internal called with pkt->data=%p, pkt->size=%d\n", pkt->data, pkt->size);
     if (!pkt->data && !avci->draining) {
         av_packet_unref(pkt);
         ret = ff_decode_get_packet(avctx, pkt);
@@ -442,6 +443,7 @@ static inline int decode_simple_internal(AVCodecContext *avctx, AVFrame *frame, 
     frame->pict_type = dc->initial_pict_type;
     frame->flags    |= dc->intra_only_flag;
     consumed = codec->cb.decode(avctx, frame, &got_frame, pkt);
+    av_log(avctx, AV_LOG_DEBUG, "Decoded frame: got_frame=%d, consumed=%d\n", got_frame, consumed);
 
     if (!(codec->caps_internal & FF_CODEC_CAP_SETS_PKT_DTS))
         frame->pkt_dts = pkt->dts;
@@ -505,6 +507,7 @@ static inline int decode_simple_internal(AVCodecContext *avctx, AVFrame *frame, 
         }
     }
 
+    av_log(avctx, AV_LOG_DEBUG, "After consuming packet: pkt->data=%p, pkt->size=%d\n", pkt->data, pkt->size);
     return ret;
 }
 
@@ -623,11 +626,13 @@ int ff_decode_receive_frame_internal(AVCodecContext *avctx, AVFrame *frame)
             frame->pict_type = dc->initial_pict_type;
             frame->flags    |= dc->intra_only_flag;
             ret = codec->cb.receive_frame(avctx, frame);
+            av_log(avctx, AV_LOG_DEBUG, "codec->cb.receive_frame returned: %d\n", ret);
             emms_c();
             if (!ret) {
                 if (avctx->codec->type == AVMEDIA_TYPE_AUDIO) {
                     int64_t discarded_samples = 0;
                     ret = discard_samples(avctx, frame, &discarded_samples);
+                    av_log(avctx, AV_LOG_DEBUG, "discard_samples returned: %d, discarded_samples: %" PRId64 "\n", ret, discarded_samples);
                 }
                 if (ret == AVERROR(EAGAIN) || (frame->flags & AV_FRAME_FLAG_DISCARD)) {
                     av_frame_unref(frame);
@@ -639,6 +644,7 @@ int ff_decode_receive_frame_internal(AVCodecContext *avctx, AVFrame *frame)
     } else
         ret = decode_simple_receive_frame(avctx, frame);
 
+    av_log(avctx, AV_LOG_DEBUG, "Final return value: %d, avctx->max_samples: %" PRId64 ", frame->buf[0]: %p\n", ret, avctx->max_samples, (void*)frame->buf[0]);
     if (ret == AVERROR_EOF)
         avci->draining_done = 1;
 
@@ -656,6 +662,7 @@ static int decode_receive_frame_internal(AVCodecContext *avctx, AVFrame *frame,
         ret = ff_thread_receive_frame(avctx, frame, flags);
     else
         ret = ff_decode_receive_frame_internal(avctx, frame);
+    av_log(avctx, AV_LOG_DEBUG, "decode_receive_frame_internal ff_decode_receive_frame_internal returned: %d\n", ret);
 
     /* preserve ret */
     ok = detect_colorspace(avctx, frame);
@@ -733,7 +740,9 @@ int attribute_align_arg avcodec_send_packet(AVCodecContext *avctx, const AVPacke
 
     if (!avci->buffer_frame->buf[0] && !dc->draining_started) {
         ret = decode_receive_frame_internal(avctx, avci->buffer_frame, 0);
+        av_log(avctx, AV_LOG_DEBUG, "decode_receive_frame_internal returned: %d\n", ret);
         if (ret < 0 && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF)
+            av_log(avctx, AV_LOG_DEBUG, "decode_receive_frame_internal error: %s\n", av_err2str(ret));
             return ret;
     }
 
