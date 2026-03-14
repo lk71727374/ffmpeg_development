@@ -165,6 +165,22 @@ MKSCALE16(scale16le, AV_RL16, AV_WL16)
 static int raw_decode(AVCodecContext *avctx, AVFrame *frame,
                       int *got_frame, AVPacket *avpkt)
 {
+    int sd_size;
+    uint8_t *sd = av_packet_get_side_data(avpkt, AV_PKT_DATA_DMA_BUF_INFO, &sd_size);
+    if (sd && sd_size >= 2 * sizeof(int)) {
+        int *fd_info = (int*)sd;
+        int dma_fd   = fd_info[0];
+        int dma_size = fd_info[1];
+
+        AVFrameSideData *fsd = av_frame_new_side_data(frame, AV_FRAME_DATA_DMA_BUF_INFO, 2 * sizeof(int));
+        if (!fsd) {
+            close(dma_fd);
+            return AVERROR(ENOMEM);
+        }
+        memcpy(fsd->data, fd_info, 2 * sizeof(int));
+        av_log(avctx, AV_LOG_DEBUG, "packet get side data ok\n");
+    }
+
     const AVPixFmtDescriptor *desc;
     RawVideoContext *context       = avctx->priv_data;
     const uint8_t *buf             = avpkt->data;

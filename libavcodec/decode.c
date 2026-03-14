@@ -708,6 +708,7 @@ static int decode_receive_frame_internal(AVCodecContext *avctx, AVFrame *frame,
 
 int attribute_align_arg avcodec_send_packet(AVCodecContext *avctx, const AVPacket *avpkt)
 {
+    av_log(avctx, AV_LOG_DEBUG, "avcodec_send_packet ...\n");
     AVCodecInternal *avci = avctx->internal;
     DecodeContext     *dc = decode_ctx(avci);
     int ret;

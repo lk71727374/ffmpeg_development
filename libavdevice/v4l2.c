@@ -530,6 +530,51 @@ static int convert_timestamp(AVFormatContext *ctx, int64_t *ts)
     return 0;
 }
 
+/**
+ * Export V4L2 buffer as DMA-BUF file descriptor
+ * For YUYV422 (single plane) format from ISP
+ */
+static int v4l2_export_dma_buf(AVFormatContext *ctx, struct video_data *s, int buf_index)
+{
+    struct v4l2_exportbuffer expbuf;
+    int dma_fd;
+    
+    memset(&expbuf, 0, sizeof(expbuf));
+    expbuf.type = s->buf_type;
+    expbuf.index = buf_index;
+    // For single plane formats like YUYV422, plane = 0
+    expbuf.plane = 0;
+    
+    if (ioctl(s->fd, VIDIOC_EXPBUF, &expbuf) < 0) {
+        av_log(ctx, AV_LOG_ERROR, "VIDIOC_EXPBUF failed: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    dma_fd = expbuf.fd;
+    av_log(ctx, AV_LOG_DEBUG, "Exported DMA-BUF fd %d for buffer %d\n", dma_fd, buf_index);
+    
+    return dma_fd;
+}
+
+/**
+ * Add DMA-BUF file descriptor as side data to packet
+ */
+static int v4l2_add_dma_buf_side_data_to_packet(AVPacket *pkt, int dma_fd, int size)
+{
+    // Add to AVPacket side data
+    uint8_t *data = av_packet_new_side_data(pkt, AV_PKT_DATA_DMA_BUF_INFO, sizeof(int) * 2);
+    if (!data) {
+        return AVERROR(ENOMEM);
+    }
+    
+    int *fd_info = (int*)data;
+    fd_info[0] = dma_fd;
+    fd_info[1] = size;
+    av_log(NULL, AV_LOG_DEBUG, "ADD DMA-BUF fd %d to packet\n", dma_fd);
+
+    return 0;
+}
+
 static int mmap_read_frame(AVFormatContext *ctx, AVPacket *pkt)
 {
     struct video_data *s = ctx->priv_data;
@@ -638,6 +683,17 @@ static int mmap_read_frame(AVFormatContext *ctx, AVPacket *pkt)
     }
     pkt->pts = buf_ts.tv_sec * INT64_C(1000000) + buf_ts.tv_usec;
     convert_timestamp(ctx, &pkt->pts);
+
+    int dma_fd = v4l2_export_dma_buf(ctx, s, buf.index);
+    if (dma_fd >= 0) {
+        int frame_size = pkt->size;
+        int ret = v4l2_add_dma_buf_side_data_to_packet(pkt, dma_fd, frame_size);
+        if (ret < 0) {
+            av_log(ctx, AV_LOG_WARNING, "Failed to add DMA-BUF side data\n");
+            close(dma_fd);
+        }
+    }
+    av_log(ctx, AV_LOG_DEBUG, "V4L2 buffer exported DMA fd %d\n", dma_fd);
 
     return pkt->size;
 }

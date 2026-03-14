@@ -55,6 +55,8 @@ typedef struct V4L2Buffer {
         int bytesperline;
         void * mm_addr;
         size_t length;
+        int dma_fd; /* DMA buffer fd for zero-copy operations */
+        int imported; /* Flag to indicate if DMA fd was imported */
     } plane_info[VIDEO_MAX_PLANES];
 
     int num_planes;

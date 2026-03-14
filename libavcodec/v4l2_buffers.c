@@ -237,6 +237,15 @@ static void v4l2_free_buffer(void *opaque, uint8_t *unused)
 {
     V4L2Buffer* avbuf = opaque;
     V4L2m2mContext *s = buf_to_m2mctx(avbuf);
+    int i;
+
+    // Close any DMA fds to prevent leaks
+    for (i = 0; i < avbuf->num_planes; i++) {
+        if (avbuf->plane_info[i].dma_fd >= 0) {
+            close(avbuf->plane_info[i].dma_fd);
+            avbuf->plane_info[i].dma_fd = -1;
+        }
+    }
 
     if (atomic_fetch_sub(&avbuf->context_refcount, 1) == 1) {
         atomic_fetch_sub_explicit(&s->refcount, 1, memory_order_acq_rel);
@@ -318,6 +327,87 @@ static int v4l2_bufref_to_buf(V4L2Buffer *out, int plane, const uint8_t* data, i
     return 0;
 }
 
+/**
+ * Import external DMA buffer fd into V4L2 buffer
+ * This allows direct passing of ISP DMA buffer fd to VPU without memory copy
+ */
+static int v4l2_import_dma_fd(V4L2Buffer *out, int plane, int dma_fd, int size)
+{
+    struct v4l2_plane *p = &out->planes[plane];
+    struct v4l2_buffer *buf = &out->buf;
+    V4L2m2mContext *s = buf_to_m2mctx(out);
+    int ret;
+
+    if (plane >= out->num_planes)
+        return AVERROR(EINVAL);
+
+    if (dma_fd < 0)
+        return AVERROR(EINVAL);
+
+    // Store the original DMA fd for cleanup
+    out->plane_info[plane].dma_fd = dma_fd;
+    out->plane_info[plane].length = size;
+    out->plane_info[plane].imported = 1;
+
+    if (V4L2_TYPE_IS_MULTIPLANAR(buf->type)) {
+        // For multiplanar buffers, set up the dmabuf import
+        p->m.fd = dma_fd;
+        p->bytesused = size;
+        p->length = size;
+        buf->memory = V4L2_MEMORY_DMABUF;
+    } else {
+        // For single planar buffers
+        buf->m.fd = dma_fd;
+        buf->bytesused = size;
+        buf->length = size;
+        buf->memory = V4L2_MEMORY_DMABUF;
+    }
+
+    av_log(logger(out), AV_LOG_DEBUG, "Imported DMA fd %d for plane %d, size %d\n", dma_fd, plane, size);
+
+    return 0;
+}
+
+/**
+ * Check if frame contains DMA buffer information via custom side data
+ * Returns 1 if DMA fd is available, 0 otherwise
+ */
+static int v4l2_frame_has_dma_fd(const AVFrame *frame, int *dma_fd, int *size)
+{
+    // Check for custom side data containing DMA fd
+    AVFrameSideData *side_data = av_frame_get_side_data(frame, AV_FRAME_DATA_DMA_BUF_INFO);
+    if (side_data && side_data->size >= sizeof(int) * 2) {
+        int *fd_info = (int*)side_data->data;
+        *dma_fd = fd_info[0];
+        *size = fd_info[1];
+        av_log(NULL, AV_LOG_DEBUG, "V4L2 frame has dma fd %d for plane %d, size %d\n", *dma_fd, 0, *size);
+        return 1;
+    }
+    av_log(NULL, AV_LOG_DEBUG, "V4L2 frame has no dma fd for plane\n");
+
+    return 0;
+}
+
+/**
+ * Check if packet contains DMA buffer information via custom side data
+ * Returns 1 if DMA fd is available, 0 otherwise
+ */
+static int v4l2_packet_has_dma_fd(const AVPacket *pkt, int *dma_fd, int *size)
+{
+    // Check for custom side data containing DMA fd
+    uint8_t *data = av_packet_get_side_data(pkt, AV_PKT_DATA_DMA_BUF_INFO, size);
+    if (data) {
+        int *fd_info = (int*)data;
+        *dma_fd = fd_info[0];
+        *size = fd_info[1];
+        av_log(NULL, AV_LOG_DEBUG, "V4L2 packet has dma fd %d, size %d\n", *dma_fd, *size);
+        return 1;
+    }
+    av_log(NULL, AV_LOG_DEBUG, "V4L2 packet has no dma fd for plane\n");
+
+    return 0;
+}
+
 static int v4l2_buffer_buf_to_swframe(AVFrame *frame, V4L2Buffer *avbuf)
 {
     int i, ret;
@@ -368,6 +458,26 @@ static int v4l2_buffer_swframe_to_buf(const AVFrame *frame, V4L2Buffer *out)
     int height       = V4L2_TYPE_IS_MULTIPLANAR(fmt.type) ?
                        fmt.fmt.pix_mp.height : fmt.fmt.pix.height;
     int is_planar_format = 0;
+
+    // Check if we can use DMA buffer directly instead of copying
+    int dma_fd, dma_size;
+    if (v4l2_frame_has_dma_fd(frame, &dma_fd, &dma_size)) {
+        // Import DMA fd directly into V4L2 buffer
+        for (i = 0; i < out->num_planes; i++) {
+            // For simplicity, assume single object covers all planes
+            // In real implementation, you might need to handle multiple objects
+            ret = v4l2_import_dma_fd(out, i, dma_fd, dma_size);
+            if (ret) {
+                av_log(logger(out), AV_LOG_WARNING, "Failed to import DMA fd, falling back to memcpy\n");
+                break;
+            }
+        }
+        av_log(logger(out), AV_LOG_DEBUG, "V4L2 buffer initialized with DMA fd %d\n", dma_fd);
+        if (ret == 0) {
+            // Successfully imported DMA fd, no need for memcpy
+            return 0;
+        }
+    }
 
     switch (pixel_format) {
     case V4L2_PIX_FMT_YUV420M:
@@ -501,6 +611,22 @@ int ff_v4l2_buffer_buf_to_avpkt(AVPacket *pkt, V4L2Buffer *avbuf)
 int ff_v4l2_buffer_avpkt_to_buf(const AVPacket *pkt, V4L2Buffer *out)
 {
     int ret;
+    int dma_fd, dma_size;
+
+    // Check if we can use DMA buffer directly instead of copying
+    if (v4l2_packet_has_dma_fd(pkt, &dma_fd, &dma_size)) {
+        // Import DMA fd directly into V4L2 buffer
+        ret = v4l2_import_dma_fd(out, 0, dma_fd, dma_size);
+        if (ret) {
+            av_log(logger(out), AV_LOG_WARNING, "Failed to import DMA fd from packet, falling back to memcpy\n");
+        } else {
+            av_log(logger(out), AV_LOG_DEBUG, "V4L2 buffer initialized with DMA fd %d from packet\n", dma_fd);
+            v4l2_set_pts(out, pkt->pts);
+            if (pkt->flags & AV_PKT_FLAG_KEY)
+                out->flags = V4L2_BUF_FLAG_KEYFRAME;
+            return 0;
+        }
+    }
 
     ret = v4l2_bufref_to_buf(out, 0, pkt->data, pkt->size, 0);
     if (ret)
@@ -522,6 +648,12 @@ int ff_v4l2_buffer_initialize(V4L2Buffer* avbuf, int index)
     avbuf->buf.memory = V4L2_MEMORY_MMAP;
     avbuf->buf.type = ctx->type;
     avbuf->buf.index = index;
+    if (ctx->type == V4L2_BUF_TYPE_VIDEO_CAPTURE || ctx->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
+        avbuf->buf.memory = V4L2_MEMORY_DMABUF;
+
+    av_log(logger(avbuf), AV_LOG_DEBUG, "V4L2 buffer initialize type %s, memory %s\n",
+           V4L2_TYPE_IS_OUTPUT(ctx->type) ? "output" : "capture",
+           avbuf->buf.memory == V4L2_MEMORY_DMABUF ? "DMABUF" : "MMAP");
 
     if (V4L2_TYPE_IS_MULTIPLANAR(ctx->type)) {
         avbuf->buf.length = VIDEO_MAX_PLANES;
@@ -547,17 +679,24 @@ int ff_v4l2_buffer_initialize(V4L2Buffer* avbuf, int index)
         avbuf->plane_info[i].bytesperline = V4L2_TYPE_IS_MULTIPLANAR(ctx->type) ?
             ctx->format.fmt.pix_mp.plane_fmt[i].bytesperline :
             ctx->format.fmt.pix.bytesperline;
-
-        if (V4L2_TYPE_IS_MULTIPLANAR(ctx->type)) {
+        if (ctx->type == V4L2_BUF_TYPE_VIDEO_CAPTURE || ctx->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
             avbuf->plane_info[i].length = avbuf->buf.m.planes[i].length;
-            avbuf->plane_info[i].mm_addr = mmap(NULL, avbuf->buf.m.planes[i].length,
-                                           PROT_READ | PROT_WRITE, MAP_SHARED,
-                                           buf_to_m2mctx(avbuf)->fd, avbuf->buf.m.planes[i].m.mem_offset);
+            avbuf->plane_info[i].mm_addr = NULL; // No need to mmap for DMABUF
         } else {
-            avbuf->plane_info[i].length = avbuf->buf.length;
-            avbuf->plane_info[i].mm_addr = mmap(NULL, avbuf->buf.length,
-                                          PROT_READ | PROT_WRITE, MAP_SHARED,
-                                          buf_to_m2mctx(avbuf)->fd, avbuf->buf.m.offset);
+            // For capture, always mmap since memory is MMAP
+            if (V4L2_TYPE_IS_MULTIPLANAR(ctx->type)) {
+                avbuf->plane_info[i].length = avbuf->buf.m.planes[i].length;
+                avbuf->plane_info[i].mm_addr = mmap(NULL, avbuf->buf.m.planes[i].length,
+                                            PROT_READ | PROT_WRITE, MAP_SHARED,
+                                            buf_to_m2mctx(avbuf)->fd, avbuf->buf.m.planes[i].m.mem_offset);
+            } else {
+                avbuf->plane_info[i].length = avbuf->buf.length;
+                avbuf->plane_info[i].mm_addr = mmap(NULL, avbuf->buf.length,
+                                            PROT_READ | PROT_WRITE, MAP_SHARED,
+                                            buf_to_m2mctx(avbuf)->fd, avbuf->buf.m.offset);
+            }
+            avbuf->plane_info[i].dma_fd = -1; // Not used for capture
+            avbuf->plane_info[i].imported = 0;
         }
 
         if (avbuf->plane_info[i].mm_addr == MAP_FAILED)

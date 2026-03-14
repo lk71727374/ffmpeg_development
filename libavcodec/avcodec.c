@@ -720,6 +720,7 @@ int attribute_align_arg avcodec_receive_frame_flags(AVCodecContext *avctx,
 
 int avcodec_receive_frame(AVCodecContext *avctx, AVFrame *frame)
 {
+    av_log(avctx, AV_LOG_DEBUG, "avcodec_receive_frame ...\n");
     return avcodec_receive_frame_flags(avctx, frame, 0);
 }
 

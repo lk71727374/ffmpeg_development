@@ -276,6 +276,14 @@ static int v4l2_send_frame(AVCodecContext *avctx, const AVFrame *frame)
     V4L2m2mContext *s = ((V4L2m2mPriv*)avctx->priv_data)->context;
     V4L2Context *const output = &s->output;
 
+    if (frame) {
+        AVFrameSideData *side_data = av_frame_get_side_data(frame, AV_FRAME_DATA_DMA_BUF_INFO);
+        if (side_data) {
+            av_log(avctx, AV_LOG_DEBUG, "Using DMA buffer fd for zero-copy encoding\n");
+        }
+    }
+    av_log(avctx, AV_LOG_DEBUG, "V4L2 send frame\n");
+
 #ifdef V4L2_CID_MPEG_VIDEO_FORCE_KEY_FRAME
     if (frame && frame->pict_type == AV_PICTURE_TYPE_I)
         v4l2_set_ext_ctrl(s, MPEG_CID(FORCE_KEY_FRAME), 0, "force key frame", 1);

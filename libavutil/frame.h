@@ -262,6 +262,8 @@ enum AVFrameSideDataType {
      AV_FRAME_DATA_EXIF,
 };
 
+#define AV_FRAME_DATA_DMA_BUF_INFO (AV_FRAME_DATA_EXIF + 100)
+
 enum AVActiveFormatDescription {
     AV_AFD_SAME         = 8,
     AV_AFD_4_3          = 9,

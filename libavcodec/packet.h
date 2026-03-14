@@ -379,6 +379,8 @@ enum AVPacketSideDataType {
     AV_PKT_DATA_NB
 };
 
+#define AV_PKT_DATA_DMA_BUF_INFO (AV_PKT_DATA_NB + 100) ///< Custom side data type for DMA-BUF information
+
 /**
  * This structure stores auxiliary information for decoding, presenting, or
  * otherwise processing the coded stream. It is typically exported by demuxers

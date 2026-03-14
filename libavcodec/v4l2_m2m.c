@@ -322,6 +322,15 @@ av_cold int ff_v4l2_m2m_codec_init(V4L2m2mPriv *priv)
 
     av_log(s->avctx, AV_LOG_INFO, "Using device %s\n", s->devname);
 
+    // Enable DMABUF memory type support
+    struct v4l2_capability cap;
+    memset(&cap, 0, sizeof(cap));
+    if (ioctl(s->fd, VIDIOC_QUERYCAP, &cap) >= 0) {
+        if (cap.capabilities & V4L2_CAP_STREAMING) {
+            av_log(s->avctx, AV_LOG_DEBUG, "V4L2 device supports streaming\n");
+        }
+    }
+
     return v4l2_configure_contexts(s);
 }
 

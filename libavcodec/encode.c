@@ -490,6 +490,7 @@ finish:
 
 int attribute_align_arg avcodec_send_frame(AVCodecContext *avctx, const AVFrame *frame)
 {
+    av_log(avctx, AV_LOG_DEBUG, "avcodec_send_frame ...\n");
     AVCodecInternal *avci = avctx->internal;
     int ret;
 
@@ -523,6 +524,7 @@ int attribute_align_arg avcodec_send_frame(AVCodecContext *avctx, const AVFrame 
 
 int attribute_align_arg avcodec_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
 {
+    av_log(avctx, AV_LOG_DEBUG, "avcodec_receive_packet ...\n");
     AVCodecInternal *avci = avctx->internal;
     int ret;
 
